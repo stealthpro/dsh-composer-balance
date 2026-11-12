@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Composer balance",
+    "description": "Shows the remaining DeepSeek account balance beneath the message composer."
+  }
+}
