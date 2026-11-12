@@ -12,17 +12,23 @@ Requires a signed-in DeepSeek account: the plugin reads the balance through the 
 
 ## Install
 
-From the Harness UI: **Settings → Plugins → Add plugin**, then paste the package address:
+Published on npm as `@stealthpro/dsh-composer-balance`. In the Harness UI open **Settings → Plugins → Add plugin** and paste the package name:
+
+```sh
+dsh plugin add @stealthpro/dsh-composer-balance
+```
+
+Add a version if needed (`@stealthpro/dsh-composer-balance@1.1.0`), enable the installed bundle, then restart the app. Reinstalling a bundle requires a restart to load the fresh client module.
+
+You can also install straight from the repository, for development or for a version that is not published yet:
 
 ```sh
 dsh plugin add git+https://github.com/stealthpro/dsh-composer-balance.git
 ```
 
-Enable the installed bundle, then restart the app. Reinstalling a bundle from the UI or CLI requires a restart to load the fresh client module.
-
 ## Updates
 
-The repository is the source of truth. To update: uninstall the bundle in **Settings → Plugins** and install it again with the same address, then restart the app.
+A registry install shows a **Versions** section on its bundle page: update from there, or uninstall and install the new version again, then restart the app. A Git install follows the repository, so bump the version, reinstall the bundle, and restart.
 
 ## How it works
 
