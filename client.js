@@ -7,12 +7,16 @@ window.__ModuleLoader__.load({
 
     const NS = 'composer.balance';
     const STAT_ID = 'account-balance';
-    /** The Host wallet read is expensive, so a mounted reading refreshes slowly. */
-    const REFRESH_MS = 5 * 60 * 1000;
-    /** Visibility-driven re-reads wait for this gap while a reading is already shown. */
-    const MIN_READ_GAP_MS = 30 * 1000;
+    /** Idle polling cadence while the page is visible. */
+    const IDLE_REFRESH_MS = 30 * 1000;
+    /** Faster cadence while a turn runs, because each request bills as it settles. */
+    const ACTIVE_REFRESH_MS = 10 * 1000;
+    /** Concurrent mounts, focus events, and turn settlements coalesce into one read. */
+    const MIN_READ_GAP_MS = 5 * 1000;
     /** With no reading yet, a retry may follow quickly after a failure. */
     const RETRY_GAP_MS = 5 * 1000;
+    /** A finished turn posts its charge just after the final chunk. */
+    const SETTLE_DELAY_MS = 2000;
     /** Viewport margin the placement clamp keeps. */
     const PANEL_MARGIN = 12;
     /** Distance between the trigger's top edge and the panel's bottom. */
@@ -257,6 +261,55 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Whether the Session behind this dock entry is running a turn. The Host
+     * bills a request as it completes, so the pill re-reads when a turn settles.
+     */
+    function useSessionRunning(ctx, sessionId) {
+      const [running, setRunning] = React.useState(false);
+      React.useEffect(() => {
+        if (typeof sessionId !== 'string' || sessionId.length === 0) return;
+        let disposed = false;
+        let timer = null;
+        let session = null;
+        let unsubscribe = null;
+        const sync = () => {
+          try {
+            setRunning(session !== null && session.getSnapshot().running === true);
+          } catch {
+            setRunning(false);
+          }
+        };
+        // The binding may not be retained yet on the first render; keep looking.
+        const attach = () => {
+          if (disposed || session !== null) return;
+          timer = null;
+          try {
+            session = ctx.get('sessions')?.binding(sessionId)?.session ?? null;
+          } catch {
+            session = null;
+          }
+          if (session === null) {
+            timer = setTimeout(attach, 2000);
+            return;
+          }
+          sync();
+          try {
+            unsubscribe = session.subscribe(sync) ?? null;
+          } catch {
+            unsubscribe = null;
+          }
+        };
+        attach();
+        return () => {
+          disposed = true;
+          if (timer !== null) clearTimeout(timer);
+          if (typeof unsubscribe === 'function') unsubscribe();
+        };
+      }, [sessionId]);
+      return running;
+    }
+
+    /**
      * One balance reading shared by every mounted composer dock: switching
      * Sessions shows the last known numbers immediately instead of re-reading,
      * and a failed refresh keeps them instead of blanking the pill.
@@ -321,10 +374,10 @@ window.__ModuleLoader__.load({
         }
       };
 
-      const refresh = (ctx) => {
+      const refresh = (ctx, force = false) => {
         if (inFlight !== null) return inFlight;
         const gap = state.status === 'ready' ? MIN_READ_GAP_MS : RETRY_GAP_MS;
-        if (Date.now() - lastAttempt < gap) return Promise.resolve();
+        if (!force && Date.now() - lastAttempt < gap) return Promise.resolve();
         lastAttempt = Date.now();
         const request = read(ctx);
         inFlight = request;
@@ -337,27 +390,53 @@ window.__ModuleLoader__.load({
       return { subscribe, getSnapshot, refresh };
     })();
 
-    function useBalance(ctx) {
+    function useBalance(ctx, running) {
       const state = React.useSyncExternalStore(
         balanceStore.subscribe,
         balanceStore.getSnapshot,
         balanceStore.getSnapshot,
       );
-
       React.useEffect(() => {
-        balanceStore.refresh(ctx);
-        const timer = setInterval(() => {
-          if (document.visibilityState !== 'hidden') balanceStore.refresh(ctx);
-        }, REFRESH_MS);
-        const onVisibility = () => {
+        let disposed = false;
+        let timer = null;
+        const schedule = () => {
+          if (disposed) return;
+          timer = setTimeout(() => {
+            timer = null;
+            if (document.visibilityState !== 'hidden') balanceStore.refresh(ctx);
+            schedule();
+          }, running ? ACTIVE_REFRESH_MS : IDLE_REFRESH_MS);
+        };
+        if (document.visibilityState !== 'hidden') balanceStore.refresh(ctx);
+        schedule();
+        const onVisible = () => {
           if (document.visibilityState === 'visible') balanceStore.refresh(ctx);
         };
-        document.addEventListener('visibilitychange', onVisibility);
+        window.addEventListener('focus', onVisible);
+        document.addEventListener('visibilitychange', onVisible);
         return () => {
-          clearInterval(timer);
-          document.removeEventListener('visibilitychange', onVisibility);
+          disposed = true;
+          if (timer !== null) clearTimeout(timer);
+          window.removeEventListener('focus', onVisible);
+          document.removeEventListener('visibilitychange', onVisible);
         };
-      }, []);
+      }, [running]);
+
+      // A settled turn books its charge right after the last chunk; the second
+      // read catches accounting that lands a few seconds later.
+      const previous = React.useRef(running);
+      React.useEffect(() => {
+        const was = previous.current;
+        previous.current = running;
+        if (!was || running) return;
+        const timers = [
+          setTimeout(() => balanceStore.refresh(ctx, true), SETTLE_DELAY_MS),
+          setTimeout(() => balanceStore.refresh(ctx, true), SETTLE_DELAY_MS * 4),
+        ];
+        return () => {
+          for (const timer of timers) clearTimeout(timer);
+        };
+      }, [running]);
 
       return state;
     }
@@ -439,9 +518,10 @@ window.__ModuleLoader__.load({
       const subscribe = (listener) => ctx.locale.subscribe(listener);
       const getLocaleSnapshot = () => ctx.locale.getSnapshot();
 
-      return function BalancePill() {
+      return function BalancePill(props) {
         React.useSyncExternalStore(subscribe, getLocaleSnapshot, getLocaleSnapshot);
-        const state = useBalance(ctx);
+        const running = useSessionRunning(ctx, props?.sessionId);
+        const state = useBalance(ctx, running);
         const dialog = useBalanceDialog();
         const now = useClock();
         if (state.status !== 'ready') return null;
@@ -537,7 +617,11 @@ window.__ModuleLoader__.load({
               'aria-label': tooltip,
               'aria-haspopup': 'dialog',
               'aria-expanded': dialog.open,
-              onClick: () => dialog.setOpen(!dialog.open),
+              onClick: () => {
+                const next = !dialog.open;
+                dialog.setOpen(next);
+                if (next) balanceStore.refresh(ctx, true);
+              },
             },
             walletIcon(),
             h('span', { className: 'dsb-label' }, t('reading', { amounts })),

@@ -8,7 +8,7 @@ Requires a signed-in DeepSeek account: the plugin reads the balance through the 
 
 - **Balance pill** in the composer stats row, next to the activity and usage pills: `¥12.34 · $0.56` and a `PEAK` / `OFF-PEAK` badge.
 - **Details popover** on click (Escape or a click outside closes it): each wallet balance, positive bonus credit, when the reading was taken, and the pricing windows in the viewer's local time zone.
-- The pill refreshes every five minutes and when the window becomes visible again. A failed refresh keeps the last known numbers instead of blanking the pill; the reading is shared across conversations, so switching sessions does not flash or hide it.
+- The reading stays current: it is re-read when a turn finishes (plus a second read a few seconds later, once the charge is booked), every 10 seconds while a turn runs, every 30 seconds while idle, when the window regains focus, and when the details popover opens. A failed refresh keeps the last known numbers instead of blanking the pill; the reading is shared across conversations, so switching sessions does not flash or hide it.
 
 ## Install
 

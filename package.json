@@ -1,6 +1,6 @@
 {
   "name": "@stealthpro/dsh-composer-balance",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Shows the remaining DeepSeek account balance under the message composer, with a details popover and a peak/off-peak pricing badge",
   "type": "module",
   "exports": {
